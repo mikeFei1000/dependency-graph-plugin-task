@@ -1,0 +1,148 @@
+/**
+ * @author zhaofei
+ * Module 依赖关系的可视化实现
+ * 不支持非module工程依赖
+ * 结果输出保存在 build/reports/dependency-graph/ 中
+ * markdown：将project.dot的内容复制到在线工具预览 https://mermaid-js.github.io/mermaid-live-editor/
+ * graphviz：利用graphviz本地生成漂亮的示意图，如果本地没有安装这个环境
+ * 可以将project_digraph.dot的内容复制到在线工具预览 http://dreampuf.github.io/GraphvizOnline/
+ */
+class ElementNode {
+    String moduleName
+    List<ElementNode> dependencyNode = new ArrayList()
+}
+
+def collectNode(HashMap<String, ElementNode> treeMap, String moduleName) {
+    def currentNode
+    if (treeMap.containsKey(moduleName)) {
+        currentNode = treeMap.get(moduleName)
+    } else {
+        currentNode = new ElementNode()
+        currentNode.moduleName = moduleName
+        treeMap.put(moduleName, currentNode)
+    }
+    return currentNode
+}
+
+/**
+ * 优化：移除不需要的依赖，原则：currentNode的孩子队列，最短依赖，有可以被非最短依赖替代的，则删除最短依赖。
+ */
+def removeUnnecessaryDependency(ElementNode currentNode) {
+    def dependencyList = currentNode.dependencyNode
+    //为了避免remove失败，创建了一个temp list
+    def tempDependencyList = new ArrayList(dependencyList)
+    def iterator = tempDependencyList.iterator()
+    while (iterator.hasNext()) {
+        def targetElement = iterator.next()
+        def leftTargetElements = new ArrayList<ElementNode>()
+        for (ElementNode elementNode : tempDependencyList) {
+            if (elementNode != targetElement) {
+                leftTargetElements.add(elementNode)
+            }
+        }
+        for (ElementNode otherItem : leftTargetElements) {
+            if (containNode(otherItem, targetElement)) {
+                dependencyList.remove(targetElement)
+                continue
+            }
+        }
+    }
+}
+
+def containNode(ElementNode rootNode, ElementNode targetNode) {
+    if (rootNode == targetNode) {
+        return true
+    }
+    def rootChildren = rootNode.dependencyNode
+    for (ElementNode child : rootChildren) {
+        if (rootNode == child) {
+            return true
+        } else {
+            def result = containNode(child, targetNode)
+            if (result) {
+                return result
+            }
+        }
+    }
+    return false
+}
+
+task projectDependencyGraph {
+    doLast {
+        // 各个module之间的依赖树
+        def treeMap = new LinkedHashMap<String, ElementNode>()
+
+        def queue = [rootProject]
+        while (!queue.isEmpty()) {
+            def project = queue.remove(0)
+            def currentNode = collectNode(treeMap, project.getName())
+            queue.addAll(project.childProjects.values())
+            project.configurations.all { config ->
+                config.dependencies
+                        .withType(ProjectDependency)
+                        .collect { it.dependencyProject }
+                        .each { dependency ->
+                            if (project.getName() != dependency.getName()) {
+                                def childNode = collectNode(treeMap, dependency.getName())
+                                println("collectNode project= " + project.getName() + " dependency = " + dependency.getName())
+                                def currentDependencyNodeList = new ArrayList<String>()
+                                for (ElementNode node : currentNode.dependencyNode) {
+                                    currentDependencyNodeList.add(node.moduleName)
+                                }
+                                if (!currentDependencyNodeList.contains(childNode.moduleName)) {
+                                    currentNode.dependencyNode.add(childNode)
+                                }
+                            }
+                        }
+            }
+        }
+
+        for (String key : treeMap.keySet()) {
+            removeUnnecessaryDependency(treeMap.get(key))
+        }
+
+        //生成project.dot
+        def dot = new File(rootProject.buildDir, 'reports/dependency-graph/project.dot')
+        dot.parentFile.mkdirs()
+        dot.delete()
+        dot << "graph TD\n"
+        for (String key : treeMap.keySet()) {
+            def element = treeMap.get(key)
+            for (ElementNode childElement : element.dependencyNode) {
+                dot << "  ${element.moduleName}-->${childElement.moduleName}\n"
+            }
+        }
+
+        //project_digraph.dot
+        def dotDigraph = new File(rootProject.buildDir, 'reports/dependency-graph/project_digraph.dot')
+        dotDigraph.parentFile.mkdirs()
+        dotDigraph.delete()
+        dotDigraph << 'digraph {\n'
+        dotDigraph << "  graph [label=\"${rootProject.name}\\n \",labelloc=t,fontsize=36,ranksep=1.4];\n"
+        dotDigraph << '  node [style=filled, fillcolor="#29d390"];\n'
+        dotDigraph << '  rankdir=TB;\n'
+        dotDigraph << '\n  # Dependencies\n\n'
+        for (String key : treeMap.keySet()) {
+            def element = treeMap.get(key)
+            for (ElementNode childElement : element.dependencyNode) {
+                dotDigraph << "  \"${element.moduleName}\" -> \"${childElement.moduleName}\""
+                dotDigraph << '\n'
+            }
+        }
+        dotDigraph << '}\n'
+
+        //在线生成依赖图
+        def p = 'dot -Tpng -O project_digraph.dot'.execute([], dotDigraph.parentFile)
+        try {
+            p.waitFor()
+        } catch (Exception e) {
+
+        }
+        if (p.exitValue() != 0) {
+//            throw new RuntimeException(p.errorStream.text)
+        }
+
+        println("copy reslut ${dot.absolutePath} to" +
+                "\nhttps://mermaid-js.github.io/mermaid-live-editor/ show graph")
+    }
+}
