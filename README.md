@@ -1,5 +1,8 @@
 # dependency-graph-plugin-task
 Visual implementation of Module dependencies
+
+## demo
+![image](https://user-images.githubusercontent.com/20104311/173043989-41d2ba42-360c-45e0-aa41-de918174eba9.png)
 ## Usage
 1. Copy ```projectDependencyGraph.gradle``` file to the root directory of the project
 2. Add plugin to ```build.gradle``` in your app
